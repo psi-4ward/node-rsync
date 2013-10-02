@@ -38,6 +38,7 @@ For more examples see the `examples` directory.
   * [instance methods](#instance-methods)
   * [accessor methods](#accessor-methods)
   * [static methods](#static-methods)
+  * [events](#events)
 
 ## constructor
 
@@ -146,61 +147,9 @@ var rsync = new Rsync()
 var c = rsync.command();
 // c is "rsync -az --rsh="ssh" /p/t/source server:/p/t/dest
 ```
+### execute(callback)
 
-### output(stdoutHandler, stderrHandler)
-
-Register output handler functions for the commands stdout and stderr output. The handlers will be
-called with streaming data from the commands output when it is executed.
-
-```javascript
-rsync.output(
-    function(data){
-        // do things like parse progress
-    }, function(data) {
-        // do things like parse error output
-    }
-);
-```
-
-This method can be called with an array containing one or two functions. These functions will
-be treated as the stdoutHandler and stderrHandler arguments. This makes it possible to register
-handlers through the `Rsync.build` method by specifying the functions as an array.
-
-```javascript
-var rsync = Rsync.build({
-    // ...
-    output: [stdoutFunc, stderrFunc] // these are references to functions defined elsewhere
-    // ...
-});
-```
-
-### execute(callback, stdoutHandler, stderrHandler)
-
-Execute the command. The callback function is called with an Error object (or null when there
-was none), the buffered output from stdout and stderr, the exit code from the executed command
-and the executed command as a String.
-
-When `stdoutHandler` and `stderrHandler` functions are provided they will be used to stream
-data from stdout and stderr directly without buffering. The finish callback will still
-receive the buffered output.
-
-```javascript
-// simple execute
-rsync.execute(function(error, stdout, stderr, code, cmd) {
-
-});
-
-// execute with stream callbacks
-rsync.execute(
-    function(error, stdout, stderr, code, cmd) {
-        // we're done
-    }, function(data){
-        // do things like parse progress
-    }, function(data) {
-        // do things like parse error output
-    }
-);
-```
+Executed the command.
 
 ## option shorthands
 
@@ -208,6 +157,7 @@ The following option shorthand methods are available:
 
   - **shell(value)**: `--rsh=SHELL`
   - **progress()**: `--progress`
+  - **overallProgress()**: `--info=progress2`
   - **archive()**: `-a`
   - **compress()**: `-z`
   - **recursive()**: `-r`
@@ -300,6 +250,13 @@ rsync.execute(function(error, stdout, stderr) {
   // we're done
 });
 ```
+
+## events
+
+  - `overallProgress` emits and object {speed,percent} if overallProgress() is set
+  - `stdout` the stdout data
+  - `stderr` the stderr data
+  - `exit` if the process terminates
 
 # Development
 
