@@ -149,7 +149,7 @@ var c = rsync.command();
 ```
 ### execute(callback)
 
-Executed the command.
+Executed the command and returns the child-process object
 
 ## option shorthands
 
