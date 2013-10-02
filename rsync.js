@@ -1,4 +1,6 @@
-var exec = require('child_process').exec;
+var spawn = require('child_process').spawn;
+var events = require("events");
+var util = require("util");
 
 /**
  * Rsync wrapper.
@@ -22,15 +24,13 @@ function Rsync(options) {
     // options
     this._options = {};
 
-    // output callbacks
-    this._outputHandlers = {
-        stdout: null,
-        stderr: null
-    };
-
     // internal debugging flag
     this._debug = false;
+
+    events.EventEmitter.call(this);
 }
+util.inherits(Rsync, events.EventEmitter);
+
 
 /**
  * Build a new Rsync command from an options Object.
@@ -212,117 +212,95 @@ Rsync.prototype.args = function() {
     if (short.length > 0) args.push('-' + short.join(''));
 
     // Add long options if any are present
-    if (long.length > 0)  args.push(long.join(' '));
+    if (long.length > 0)  args = args.concat(long);
 
     // Add includes.
     if (this._includes.length > 0) {
         args.push(this._includes.map(function(pattern) {
             return buildOption('include', pattern);
-        }).join(' '));
+        }));
     }
 
     // Add excludes
     if (this._excludes.length > 0) {
         args.push(this._excludes.map(function(pattern) {
             return buildOption('exclude', pattern);
-        }).join(' '));
+        }));
     }
 
     // Add source(s) and destination
-    args.push(
-        this.source().join(' '),
-        this.destination()
-    );
-
+    args = args.concat(this.source());
+    args.push(this.destination());
     return args;
 };
 
 /**
- * Register an output handlers for the commands stdout and stderr streams.
- * These functions will be called once data is streamed on one of the output buffers
- * when the command is executed using `execute`.
- *
- * Only one callback function can be registered for each output stream. Previously
- * registered callbacks will be overridden.
- *
- * @param {Function} stdout     Callback Function for stdout data
- * @param {Function} stderr     Callback Function for stderr data
- * @return Rsync
- */
-Rsync.prototype.output = function(stdout, stderr) {
-    // Check for single argument so the method can be used with Rsync.build
-    if (arguments.length === 1 && Array.isaArray(stdout)) {
-        stderr = stdout[1];
-        stdout = stdout[0];
-    }
-
-    if (typeof(stdout) === 'function') {
-        this._outputHandlers.stdout = stdout;
-    }
-    if (typeof(stderr) === 'function') {
-        this._outputHandlers.stderr = stdout;
-    }
-
-    return this;
-}
-
-/**
  * Execute the rsync command.
- *
- * The callback function is called with an Error object (or null when there was none), the
- * buffered output from stdout and stderr, the exit code from the executed command and the
- * executed command as a String.
- *
- * When stdoutHandler and stderrHandler functions are provided they will be used to stream
- * data from stdout and stderr directly without buffering. The finish callback will still
- * receive the buffered output.
- *
- * @param {Function} callback       Called when rsync finishes
- * @param {Function} stdoutHandler  (optional) Called on each chunk received from stdout
- * @param {Function} stderrHandler  (optional) Called on each chunk received from stderr
+ * @param {Function} callback
  */
-Rsync.prototype.execute = function(callback, stdoutHandler, stderrHandler) {
-    // Register output handlers
-    this.output(stdoutHandler, stderrHandler);
+Rsync.prototype.execute = function(callback) {
+    var self = this;
 
     // Execute the command in a subshell
-    var cmd = this.command();
+    var cmd  = this.command();
 
     // output buffers
-    var stdoutBuffer = '',
-        stderrBuffer = '';
+     var stderrBuffer = '';
 
     // Execute the command and wait for it to finish
-    var command = exec(cmd);
+    var command = spawn(this.executable(), this.args());
+
+    // Emit overallProgress info if option is set
+    var parseOverallProgress = (this._options['info=progress2'] !== undefined);
+    var progressExp = /\d+?\s+?(\d+)?%\s.+?([^\s]+?\/s)/;
+    var lastPercent = -1;
+    var lastSpeed = 0;
+    if(parseOverallProgress) {
+        command.stdout.on('data', function(chunk) {
+            var match = chunk.toString().match(progressExp);
+            if (!match) return;
+            var percent = parseInt(match[1]);
+            if(percent == 0) percent = 1; // be slightly over 0
+            if(percent > 99) percent = 99; // be slightly under 100
+            // only emit on percent change
+            if(lastPercent !== percent) {
+              lastPercent = percent;
+              lastSpeed = match[2];
+              self.emit('overallProgress', {speed: match[2], percent: percent});
+            }
+        });
+    }
 
     // capture stdout and stderr
     command.stdout.on('data', function(chunk) {
-        stdoutBuffer += chunk;
-        if (typeof(this._outputHandlers.stdout) === 'function') {
-            this._outputHandlers.stdout(chunk);
-        }
+        self.emit('stdout', chunk);
     });
     command.stderr.on('data', function(chunk) {
-        stderrBuffer += chunk;
-        if (typeof(this._outputHandlers.stdout) === 'function') {
-            this._outputHandlers.stdout(chunk);
-        }
+        self.emit('stderr', chunk);
+        stderrBuffer += chunk.toString();
     });
 
-    command.on('exit', function(code) {
+    command.on('close', function(code) {
         var error = null;
+        self.emit('exit', code);
 
         // Check rsyncs error code
         // @see http://bluebones.net/2007/06/rsync-exit-codes/
         if (code !== 0) {
             error = new Error('rsync exited with code ' + code);
+        } else {
+          if(parseOverallProgress) {
+            self.emit('overallProgress', {speed: lastSpeed, percent: 100});
+          }
         }
 
         // Check for callback
         if (typeof(callback) === 'function') {
-            callback(error, stdoutBuffer, stderrBuffer, code, cmd);
+            callback(error, stderrBuffer, cmd);
         }
     });
+
+    return command;
 };
 
 createValueAccessor('debug');
@@ -336,6 +314,8 @@ createListAccessor('include', '_includes');
 exposeLongOption('rsh', 'shell');
 
 exposeShortOption('progress');
+exposeShortOption('info=progress2', 'overallProgress');
+exposeShortOption('delete', 'delete');
 exposeShortOption('a', 'archive');
 exposeShortOption('z', 'compress');
 exposeShortOption('r', 'recursive');
